@@ -119,13 +119,16 @@ data class UserSettings(
 
 @kotlinx.serialization.Serializable
 data class DiscoverBook(
-    val gutendexId: Int,
+    /** Único entre fuentes: "<sourceId>:<id en la fuente>". */
+    val id: String,
     val title: String,
     val author: String,
     val genre: String,
     val coverUrl: String?,
     val epubDownloadUrl: String?,
-    val downloadCount: Int
+    val downloadCount: Int = 0,
+    /** URLs alternativas del mismo EPUB, en orden, si falla la principal. */
+    val mirrors: List<String> = emptyList()
 )
 
 data class ReadingStats(

@@ -38,12 +38,12 @@ class GutendexApi @Inject constructor(
     private val client: HttpClient
 ) {
     // Sin mime_type: en gutendex.com ese filtro (y consultas no cacheadas) cuelga >45 s; se filtra EPUB en cliente.
-    suspend fun searchBooks(query: String, page: Int = 1): GutendexResponseDto = fetch("search" to query, page)
+    suspend fun searchBooks(baseUrl: String, query: String, page: Int = 1): GutendexResponseDto = fetch(baseUrl, "search" to query, page)
 
-    suspend fun getBooksByTopic(topic: String, page: Int = 1): GutendexResponseDto = fetch("topic" to topic.lowercase(), page)
+    suspend fun getBooksByTopic(baseUrl: String, topic: String, page: Int = 1): GutendexResponseDto = fetch(baseUrl, "topic" to topic.lowercase(), page)
 
-    private suspend fun fetch(p: Pair<String, String>, page: Int): GutendexResponseDto =
-        client.get("https://gutendex.com/books/") {
+    private suspend fun fetch(baseUrl: String, p: Pair<String, String>, page: Int): GutendexResponseDto =
+        client.get(baseUrl) {
             parameter(p.first, p.second)
             if (page > 1) parameter("page", page)
             timeout { requestTimeoutMillis = 10_000; connectTimeoutMillis = 5_000; socketTimeoutMillis = 10_000 }

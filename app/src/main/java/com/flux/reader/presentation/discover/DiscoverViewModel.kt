@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.flux.reader.domain.model.Book
 import com.flux.reader.domain.model.DiscoverBook
+import com.flux.reader.domain.model.BookSource
+import com.flux.reader.domain.model.SourcesState
+import com.flux.reader.domain.repository.DiscoverRepository
 import com.flux.reader.domain.usecase.GetLibraryBooksUseCase
 import com.flux.reader.domain.usecase.SearchDiscoverBooksUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -21,21 +24,26 @@ data class DiscoverUiState(
     val continueReadingBook: Book? = null,
     val errorMessage: String? = null,
     val lastGenre: String? = "Adventure",
-    val downloadingIds: Set<Int> = emptySet(),
-    val progress: Map<Int, Float> = emptyMap(),
+    val downloadingIds: Set<String> = emptySet(),
+    val progress: Map<String, Float> = emptyMap(),
     val page: Int = 1,
     val hasMore: Boolean = false,
     val isLoadingMore: Boolean = false,
-    val addedIds: Set<Int> = emptySet(),
-    val toast: String? = null
-)
+    val addedIds: Set<String> = emptySet(),
+    val toast: String? = null,
+    val sources: SourcesState = SourcesState(),
+    val selectedSourceId: String? = null,
+    val addingRepo: Boolean = false
+) {
+    val selectedSource: BookSource? get() = sources.installed.firstOrNull { it.id == selectedSourceId } ?: sources.installed.firstOrNull()
+}
 
 /** Mensaje amable para fallas de red (gutendex.com puede tardar o caer). */
 internal fun friendlyError(t: Throwable): String = when (t) {
     is io.ktor.client.plugins.HttpRequestTimeoutException,
     is io.ktor.client.network.sockets.ConnectTimeoutException,
     is io.ktor.client.network.sockets.SocketTimeoutException ->
-        "El catálogo (Project Gutenberg) tardó demasiado en responder. Revisa tu conexión e inténtalo de nuevo."
+        "La fuente tardó demasiado en responder. Revisa tu conexión e inténtalo de nuevo."
     is java.io.IOException -> "No se pudo conectar con el catálogo. Revisa tu conexión a internet."
     else -> "No se pudo cargar el catálogo: ${t.message ?: "error desconocido"}"
 }
@@ -43,6 +51,7 @@ internal fun friendlyError(t: Throwable): String = when (t) {
 @HiltViewModel
 class DiscoverViewModel @Inject constructor(
     private val searchDiscoverBooks: SearchDiscoverBooksUseCase,
+    private val discoverRepository: DiscoverRepository,
     getLibraryBooks: GetLibraryBooksUseCase
 ) : ViewModel() {
 
@@ -57,8 +66,34 @@ class DiscoverViewModel @Inject constructor(
                 }
             }
         }
-        loadGenre("Adventure")
+        viewModelScope.launch {
+            discoverRepository.sources.collect { src ->
+                val before = _uiState.value.selectedSource
+                _uiState.update { it.copy(sources = src) }
+                val now = _uiState.value.selectedSource
+                // Recarga al instalar la primera fuente o al quitar la seleccionada.
+                if (now != null && now != before) loadGenre(_uiState.value.lastGenre ?: "Adventure")
+                if (now == null) _uiState.update { it.copy(results = emptyList(), hasMore = false, errorMessage = null, isLoading = false) }
+            }
+        }
     }
+
+    fun selectSource(id: String) {
+        _uiState.update { it.copy(selectedSourceId = id, query = "") }
+        loadGenre(_uiState.value.lastGenre ?: "Adventure")
+    }
+
+    fun addRepo(url: String) = viewModelScope.launch {
+        _uiState.update { it.copy(addingRepo = true) }
+        discoverRepository.addRepo(url)
+            .onSuccess { r -> _uiState.update { it.copy(toast = "Repositorio «${r.name}» agregado: ${r.sources.size} fuente(s) para instalar") } }
+            .onFailure { e -> _uiState.update { it.copy(toast = "No se pudo agregar: ${e.message ?: friendlyError(e)}") } }
+        _uiState.update { it.copy(addingRepo = false) }
+    }
+
+    fun removeRepo(url: String) = discoverRepository.removeRepo(url)
+    fun install(source: BookSource) = discoverRepository.installSource(source)
+    fun uninstall(id: String) = discoverRepository.uninstallSource(id)
 
     fun onQueryChange(newQuery: String) {
         _uiState.update { it.copy(query = newQuery) }
@@ -74,11 +109,12 @@ class DiscoverViewModel @Inject constructor(
                 if (page == 1) it.copy(isLoading = true, errorMessage = null, lastGenre = genre, results = emptyList(), page = 1, hasMore = false)
                 else it.copy(isLoadingMore = true, errorMessage = null)
             }
-            val r = if (search != null) searchDiscoverBooks.search(search, page) else searchDiscoverBooks.byGenre(genre!!, page)
+            val source = _uiState.value.selectedSource ?: run { _uiState.update { it.copy(isLoading = false, isLoadingMore = false) }; return@launch }
+            val r = searchDiscoverBooks.browse(source, search, genre.takeIf { source.engine?.hasGenres == true }, page)
             r.onSuccess { p ->
                 _uiState.update { s ->
                     s.copy(isLoading = false, isLoadingMore = false, page = page, hasMore = p.hasMore,
-                        results = (if (page == 1) p.books else s.results + p.books).distinctBy { it.gutendexId })
+                        results = (if (page == 1) p.books else s.results + p.books).distinctBy { it.id })
                 }
             }.onFailure { err -> _uiState.update { it.copy(isLoading = false, isLoadingMore = false, errorMessage = friendlyError(err)) } }
         }
@@ -106,10 +142,10 @@ class DiscoverViewModel @Inject constructor(
     fun dismissToast() = _uiState.update { it.copy(toast = null) }
 
     fun addToLibrary(book: DiscoverBook) = viewModelScope.launch {
-        _uiState.update { it.copy(downloadingIds = it.downloadingIds + book.gutendexId) }
-        searchDiscoverBooks.importToLibrary(book) { f -> _uiState.update { it.copy(progress = it.progress + (book.gutendexId to f)) } }
-            .onSuccess { _uiState.update { s -> s.copy(addedIds = s.addedIds + book.gutendexId, toast = "«${book.title}» añadido a tu biblioteca") } }
+        _uiState.update { it.copy(downloadingIds = it.downloadingIds + book.id) }
+        searchDiscoverBooks.importToLibrary(book) { f -> _uiState.update { it.copy(progress = it.progress + (book.id to f)) } }
+            .onSuccess { _uiState.update { s -> s.copy(addedIds = s.addedIds + book.id, toast = "«${book.title}» añadido a tu biblioteca") } }
             .onFailure { e -> _uiState.update { s -> s.copy(toast = "No se pudo descargar: ${friendlyError(e)}") } }
-        _uiState.update { it.copy(downloadingIds = it.downloadingIds - book.gutendexId, progress = it.progress - book.gutendexId) }
+        _uiState.update { it.copy(downloadingIds = it.downloadingIds - book.id, progress = it.progress - book.id) }
     }
 }

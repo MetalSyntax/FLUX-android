@@ -32,17 +32,17 @@ object OpdsParser {
     private val titleRx = Regex("<title>(.*?)</title>", RegexOption.DOT_MATCHES_ALL)
     private val authorRx = Regex("<content[^>]*>(.*?)</content>", RegexOption.DOT_MATCHES_ALL)
 
-    fun parse(xml: String): List<DiscoverBook> = entryRx.findAll(xml).mapNotNull { m ->
+    fun parse(xml: String, sourceId: String = "gutenberg"): List<DiscoverBook> = entryRx.findAll(xml).mapNotNull { m ->
         val e = m.groupValues[1]
         val id = idRx.find(e)?.groupValues?.get(1)?.toIntOrNull() ?: return@mapNotNull null
         DiscoverBook(
-            gutendexId = id,
+            id = "$sourceId:$id",
             title = unescape(titleRx.find(e)?.groupValues?.get(1) ?: return@mapNotNull null),
             author = unescape(authorRx.find(e)?.groupValues?.get(1) ?: "Autor desconocido"),
             genre = "Clásicos",
             coverUrl = "https://www.gutenberg.org/cache/epub/$id/pg$id.cover.medium.jpg",
             epubDownloadUrl = "https://www.gutenberg.org/ebooks/$id.epub3.images",
-            downloadCount = 0
+            mirrors = EpubMirrors.candidates(id, null)
         )
     }.toList()
 

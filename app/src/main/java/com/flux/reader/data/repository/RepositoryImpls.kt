@@ -7,7 +7,18 @@ import com.flux.reader.data.mapper.toEntity
 import com.flux.reader.data.remote.CatalogCache
 import com.flux.reader.data.remote.EpubMirrors
 import com.flux.reader.data.remote.GutendexApi
-import com.flux.reader.data.remote.GutendexResponseDto
+import com.flux.reader.data.remote.OpdsFeed
+import com.flux.reader.data.remote.OpenLibraryMapper
+import com.flux.reader.data.remote.OpenLibraryResponseDto
+import com.flux.reader.data.remote.RepoIndexParser
+import com.flux.reader.data.remote.SourceStore
+import com.flux.reader.domain.model.BookSource
+import com.flux.reader.domain.model.SourceRepo
+import com.flux.reader.domain.model.SourceType
+import com.flux.reader.domain.model.SourcesState
+import io.ktor.client.request.parameter
+import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.flow.StateFlow
 import com.flux.reader.data.remote.OpdsParser
 import com.flux.reader.domain.model.CatalogPage
 import io.ktor.http.contentLength
@@ -129,39 +140,83 @@ class DiscoverRepositoryImpl @Inject constructor(
 ) : DiscoverRepository {
 
     private val cache = CatalogCache(java.io.File(context.cacheDir, "catalog"))
+    private val store = SourceStore(java.io.File(context.filesDir, "sources.json"))
+    override val sources: StateFlow<SourcesState> = store.state
 
-    /** Gutendex -> OPDS (solo búsqueda, 1 página) -> caché vencida. Caché fresca responde sin red. */
-    private suspend fun load(key: String, page: Int, query: String, fetch: suspend () -> GutendexResponseDto, genre: String? = null): Result<CatalogPage> {
-        val ck = "$key|$page"
+    override suspend fun addRepo(url: String): Result<SourceRepo> = runCatching {
+        val u = url.trim()
+        require(u.startsWith("https://") || u.startsWith("http://")) { "La dirección debe empezar por https://" }
+        val body = client.get(u) { timeout { requestTimeoutMillis = 15_000 } }
+            .also { check(it.status.isSuccess()) { "HTTP ${it.status.value}" } }.bodyAsText()
+        RepoIndexParser.parse(u, body).also { withContext(Dispatchers.IO) { store.addRepo(it) } }
+    }
+
+    override fun removeRepo(url: String) = store.removeRepo(url)
+    override fun installSource(source: BookSource) = store.install(source)
+    override fun uninstallSource(id: String) = store.uninstall(id)
+
+    /** Caché fresca responde sin red; si la red falla, sirve la vencida. */
+    override suspend fun browse(source: BookSource, query: String?, genre: String?, page: Int): Result<CatalogPage> {
+        val ck = "${source.id}|${source.url}|${query?.lowercase()}|${genre?.lowercase()}|$page"
         val hit = cache.get(ck)
         if (hit?.second == true) return Result.success(CatalogPage(hit.first, hit.first.size >= PAGE_SIZE))
         return runCatching {
-            val dto = fetch()
-            val l = dto.results.filter { "application/epub+zip" in it.formats }.map { it.toDomain(genre ?: "Clásicos") }
-            CatalogPage(l, dto.next != null).also { cache.put(ck, l) }
-        }.recoverCatching { first ->
-            if (first is kotlinx.coroutines.CancellationException) throw first
-            if (page > 1) throw first
-            val l = OpdsParser.parse(api.opdsSearch(query)).also { check(it.isNotEmpty()) { "OPDS vacío" } }
-            CatalogPage(l, false).also { cache.put(ck, l) }
+            when (source.engine) {
+                SourceType.GUTENDEX -> gutendex(source, query, genre, page)
+                SourceType.OPEN_LIBRARY -> openLibrary(source, query, genre, page)
+                SourceType.OPDS -> opds(source, query, page)
+                null -> error("Tipo de fuente no compatible: ${source.type}")
+            }.also { cache.put(ck, it.books) }
         }.recoverCatching { err ->
             if (err is kotlinx.coroutines.CancellationException) throw err
             hit?.let { CatalogPage(it.first, false) } ?: throw err
         }
     }
 
-    override suspend fun searchCatalog(query: String, page: Int): Result<CatalogPage> =
-        load("s:${query.lowercase()}", page, query, { api.searchBooks(query, page) })
+    /** Gutendex; si falla la búsqueda, el OPDS oficial de Gutenberg (1 página). */
+    private suspend fun gutendex(source: BookSource, query: String?, genre: String?, page: Int): CatalogPage = runCatching {
+        val dto = if (!query.isNullOrBlank()) api.searchBooks(source.url, query, page) else api.getBooksByTopic(source.url, genre ?: "Adventure", page)
+        CatalogPage(dto.results.filter { "application/epub+zip" in it.formats }.map { it.toDomain(genre ?: "Clásicos", source.id) }, dto.next != null)
+    }.recoverCatching { first ->
+        if (first is kotlinx.coroutines.CancellationException || page > 1) throw first
+        CatalogPage(OpdsParser.parse(api.opdsSearch(query ?: genre ?: "Adventure"), source.id).also { check(it.isNotEmpty()) { "OPDS vacío" } }, false)
+    }.getOrThrow()
 
-    override suspend fun getCuratedByGenre(genre: String, page: Int): Result<CatalogPage> =
-        load("g:${genre.lowercase()}", page, genre, { api.getBooksByTopic(genre, page) }, genre)
+    private suspend fun openLibrary(source: BookSource, query: String?, genre: String?, page: Int): CatalogPage {
+        val dto: OpenLibraryResponseDto = client.get(source.url.trimEnd('/') + "/search.json") {
+            parameter("q", OpenLibraryMapper.query(query, if (query.isNullOrBlank()) genre ?: "fiction" else null))
+            parameter("fields", OpenLibraryMapper.FIELDS)
+            parameter("limit", OpenLibraryMapper.PAGE_SIZE)
+            parameter("page", page)
+            timeout { requestTimeoutMillis = 15_000 }
+        }.also { check(it.status.isSuccess()) { "HTTP ${it.status.value}" } }.body()
+        return CatalogPage(OpenLibraryMapper.toBooks(dto, source.id, genre ?: ""), page * OpenLibraryMapper.PAGE_SIZE < dto.numFound)
+    }
+
+    /** OPDS: la página siguiente se guarda por fuente/consulta porque el feed da la URL, no un número. */
+    private val opdsNext = HashMap<String, String>()
+
+    private suspend fun opds(source: BookSource, query: String?, page: Int): CatalogPage {
+        val key = "${source.id}|$query"
+        val url = when {
+            page > 1 -> opdsNext[key] ?: return CatalogPage(emptyList(), false)
+            !query.isNullOrBlank() -> (source.search ?: error("Esta fuente no permite buscar"))
+                .replace("{q}", java.net.URLEncoder.encode(query, "UTF-8"))
+            else -> source.url
+        }
+        val xml = client.get(url) { timeout { requestTimeoutMillis = 15_000 } }
+            .also { check(it.status.isSuccess()) { "HTTP ${it.status.value}" } }.bodyAsText()
+        val p = OpdsFeed.parse(xml, url, source.id)
+        if (p.next != null) opdsNext[key] = p.next else opdsNext.remove(key)
+        return CatalogPage(p.books, p.next != null)
+    }
 
     /** Descarga el EPUB (probando mirrors en orden, con progreso) y lo importa a la biblioteca. */
     override suspend fun importFromDiscover(discoverBook: DiscoverBook, onProgress: (Float) -> Unit): Result<Book> = runCatching {
         if (discoverBook.epubDownloadUrl == null) error("Este libro no tiene EPUB disponible")
         val tmp = files.tempFile("dl")
         try {
-            EpubMirrors.firstSuccess(EpubMirrors.candidates(discoverBook.gutendexId, discoverBook.epubDownloadUrl)) { url ->
+            EpubMirrors.firstSuccess((listOfNotNull(discoverBook.epubDownloadUrl) + discoverBook.mirrors).distinct()) { url ->
                 withContext(Dispatchers.IO) {
                     client.prepareGet(url) {
                         timeout { requestTimeoutMillis = 600_000; connectTimeoutMillis = 8_000; socketTimeoutMillis = 25_000 }
@@ -183,7 +238,7 @@ class DiscoverRepositoryImpl @Inject constructor(
                     }
                 }
             }
-            var book = files.importFile(tmp, "gutenberg_${discoverBook.gutendexId}.epub", discoverBook.title, discoverBook.author).getOrThrow()
+            var book = files.importFile(tmp, discoverBook.id.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80) + ".epub", discoverBook.title, discoverBook.author).getOrThrow()
             if (book.coverUri.isBlank() && !discoverBook.coverUrl.isNullOrBlank()) {
                 runCatching { client.get(discoverBook.coverUrl) { timeout { requestTimeoutMillis = 15_000 } }.body<ByteArray>() }.onSuccess { files.saveCoverBytes(book.id, it) }
                 book = book.copy(coverUri = files.coverFile(book.id).takeIf { it.exists() }?.absolutePath.orEmpty())

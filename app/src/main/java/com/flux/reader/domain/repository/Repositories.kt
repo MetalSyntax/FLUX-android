@@ -37,7 +37,13 @@ interface SettingsRepository {
 }
 
 interface DiscoverRepository {
-    suspend fun searchCatalog(query: String, page: Int = 1): Result<CatalogPage>
-    suspend fun getCuratedByGenre(genre: String, page: Int = 1): Result<CatalogPage>
+    val sources: kotlinx.coroutines.flow.StateFlow<com.flux.reader.domain.model.SourcesState>
+    suspend fun addRepo(url: String): Result<com.flux.reader.domain.model.SourceRepo>
+    fun removeRepo(url: String)
+    fun installSource(source: com.flux.reader.domain.model.BookSource)
+    fun uninstallSource(id: String)
+
+    /** [query] null = portada de la fuente (o el género, si la fuente los admite). */
+    suspend fun browse(source: com.flux.reader.domain.model.BookSource, query: String?, genre: String?, page: Int = 1): Result<CatalogPage>
     suspend fun importFromDiscover(discoverBook: DiscoverBook, onProgress: (Float) -> Unit = {}): Result<Book>
 }

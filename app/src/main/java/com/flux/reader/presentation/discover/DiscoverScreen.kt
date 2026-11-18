@@ -38,6 +38,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +60,14 @@ fun DiscoverScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    var showSources by rememberSaveable { mutableStateOf(false) }
+    if (showSources) SourcesSheet(
+        sources = state.sources, adding = state.addingRepo,
+        onAddRepo = viewModel::addRepo, onRemoveRepo = viewModel::removeRepo,
+        onInstall = viewModel::install, onUninstall = viewModel::uninstall,
+        onDismiss = { showSources = false }
+    )
+    val source = state.selectedSource
     LaunchedEffect(state.toast) { state.toast?.let { snackbar.showSnackbar(it); viewModel.dismissToast() } }
 
     Scaffold(contentWindowInsets = WindowInsets.statusBars, snackbarHost = { SnackbarHost(snackbar) }) { scaffoldPadding ->
@@ -98,6 +109,30 @@ fun DiscoverScreen(
         }
 
         item {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                items(state.sources.installed, key = { it.id }) { s ->
+                    FluxChip(selected = s.id == source?.id, onClick = { viewModel.selectSource(s.id) }, label = { Text(s.name) })
+                }
+                item { FilledTonalButton(onClick = { showSources = true }) { Text("Fuentes") } }
+            }
+        }
+
+        if (source == null) {
+            item {
+                GlassCard(shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("No hay fuentes instaladas", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Descubrir no trae catálogos de fábrica. Agrega un repositorio de fuentes e instala las que quieras usar.",
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(onClick = { showSources = true }) { Text("Gestionar fuentes") }
+                    }
+                }
+            }
+        }
+
+        if (source != null) item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -107,7 +142,8 @@ fun DiscoverScreen(
                     value = state.query,
                     onValueChange = viewModel::onQueryChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Buscar en Project Gutenberg...") },
+                    placeholder = { Text("Buscar en ${source.name}...") },
+                    enabled = source.engine != com.flux.reader.domain.model.SourceType.OPDS || source.search != null,
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     shape = RoundedCornerShape(24.dp),
@@ -119,11 +155,11 @@ fun DiscoverScreen(
             }
         }
 
-        item {
+        if (source?.engine?.hasGenres == true) item {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(discoverGenres) { genre ->
                     FluxChip(
-                        selected = false,
+                        selected = genre == state.lastGenre,
                         onClick = { viewModel.loadGenre(genre) },
                         label = { Text(genre) }
                     )
@@ -153,11 +189,11 @@ fun DiscoverScreen(
             }
         }
 
-        if (!state.isLoading && state.errorMessage == null && state.results.isEmpty()) {
+        if (source != null && !state.isLoading && state.errorMessage == null && state.results.isEmpty()) {
             item { Text("Sin resultados.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
 
-        items(state.results, key = { it.gutendexId }) { item ->
+        items(state.results, key = { it.id }) { item ->
             GlassCard(shape = RoundedCornerShape(16.dp)) {
                 Row(
                     modifier = Modifier
@@ -182,18 +218,18 @@ fun DiscoverScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    val busy = item.gutendexId in state.downloadingIds
-                    val added = item.gutendexId in state.addedIds
+                    val busy = item.id in state.downloadingIds
+                    val added = item.id in state.addedIds
                     FilledTonalButton(
                         onClick = { viewModel.addToLibrary(item) },
                         enabled = !busy && !added && item.epubDownloadUrl != null
                     ) {
-                        val pr = state.progress[item.gutendexId]
+                        val pr = state.progress[item.id]
                         if (busy && pr != null && pr > 0f) CircularProgressIndicator(progress = { pr }, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         else if (busy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         else Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (added) "Añadido" else if (busy) (state.progress[item.gutendexId]?.let { "${(it * 100).toInt()}%" } ?: "Descargando") else "Añadir")
+                        Text(if (added) "Añadido" else if (busy) (state.progress[item.id]?.let { "${(it * 100).toInt()}%" } ?: "Descargando") else "Añadir")
                     }
                 }
             }

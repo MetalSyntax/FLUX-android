@@ -18,7 +18,7 @@ class CatalogSourcesTest {
 
     @Test fun opdsParsesBooksAndSkipsNavigationEntries() {
         val l = OpdsParser.parse(opds)
-        assertEquals(listOf(2000, 996), l.map { it.gutendexId })
+        assertEquals(listOf("gutenberg:2000", "gutenberg:996"), l.map { it.id })
         assertEquals("Don Quijote & Sancho", l[0].title)
         assertEquals("Cervantes Saavedra, Miguel de", l[0].author)
         assertEquals("Autor desconocido", l[1].author)
@@ -45,7 +45,7 @@ class CatalogSourcesTest {
     @Test fun cacheRoundTripsAndExpires() {
         val dir = createTempDir()
         var t = 1_000_000L
-        val book = DiscoverBook(1, "T", "A", "G", null, "u", 3)
+        val book = DiscoverBook("s:1", "T", "A", "G", null, "u", 3, listOf("m"))
         CatalogCache(dir) { t }.put("k", listOf(book))
         val disk = CatalogCache(dir) { t + 10 }   // instancia nueva = solo disco
         assertEquals(true, disk.get("k")!!.second); assertEquals(listOf(book), disk.get("k")!!.first)

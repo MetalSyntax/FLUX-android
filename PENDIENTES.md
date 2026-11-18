@@ -14,3 +14,12 @@
 Causa medida: gutendex.com/books cuelga >45 s con consultas no cacheadas (search=, mime_type=, topic combinado; la app mandaba mime_type siempre) y www.gutenberg.org estaba en mantenimiento (503) hasta 18-nov 21:00 UTC; el único mirror que sirve EPUB (gutenberg.pglaf.org) va a ~19 KB/s.
 Cambios: timeouts 10 s en catálogo y 8 s conexión/25 s socket en descargas; sin mime_type (filtro EPUB en cliente); fallback Gutendex -> OPDS oficial -> caché vencida; caché memoria+disco (6 h, cacheDir/catalog); paginación ("Cargar más", Gutendex); descarga con lista de mirrors (www ebooks, cache/epub, pglaf) y progreso %; tests en test/.../data/remote/CatalogSourcesTest.kt.
 Pendiente: probar en el dispositivo; el parser OPDS no se pudo validar contra el feed real (gutenberg.org caído), revisar cuando vuelva; portadas siguen en www.gutenberg.org (sin fallback); OPDS sin paginación; Standard Ebooks requiere auth (401), descartado.
+
+## Fuentes instalables (reemplazo de Gutenberg fijo) — 2026-11-18
+- [x] Descubrir arranca sin catálogos; botón «Fuentes»: agregar repositorio por URL (JSON), instalar/quitar fuentes, quitar repositorio (quita sus fuentes). Guardado en filesDir/sources.json.
+- [x] Motores: `gutendex` (Gutenberg, con fallback OPDS y mirrors), `openlibrary` (solo dominio público, EPUB de archive.org), `opds` (feed OPDS 1.x genérico, búsqueda con plantilla `{q}`). Las fuentes son datos validados, nunca código.
+- [x] Repo de ejemplo: `repos/flux-sources.json` (Gutenberg + Open Library) → tras el push: https://raw.githubusercontent.com/MetalSyntax/FLUX-android/main/repos/flux-sources.json
+- [x] Tests: BookSourcesTest (validación de repo, store, OPDS, Open Library). Build debug OK.
+- [ ] Probar en el TECNO (no había dispositivo por USB).
+- [ ] Motor OPDS sin validar contra un feed real (Gutenberg 503 y Feedbooks caído el 18-nov).
+- [ ] Las fuentes no van en el respaldo .zip (hay que volver a agregar el repo tras restaurar).

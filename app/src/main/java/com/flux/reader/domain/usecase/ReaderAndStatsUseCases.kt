@@ -45,11 +45,8 @@ class RecordReadingSessionUseCase @Inject constructor(
 class SearchDiscoverBooksUseCase @Inject constructor(
     private val discoverRepository: DiscoverRepository
 ) {
-    suspend fun search(query: String, page: Int = 1): Result<CatalogPage> =
-        discoverRepository.searchCatalog(query, page)
-
-    suspend fun byGenre(genre: String, page: Int = 1): Result<CatalogPage> =
-        discoverRepository.getCuratedByGenre(genre, page)
+    suspend fun browse(source: com.flux.reader.domain.model.BookSource, query: String?, genre: String?, page: Int = 1): Result<CatalogPage> =
+        discoverRepository.browse(source, query, genre, page)
 
     suspend fun importToLibrary(discoverBook: DiscoverBook, onProgress: (Float) -> Unit = {}): Result<Book> =
         discoverRepository.importFromDiscover(discoverBook, onProgress)

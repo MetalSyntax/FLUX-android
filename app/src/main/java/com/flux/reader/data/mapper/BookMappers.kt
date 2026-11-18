@@ -98,12 +98,13 @@ fun ReadingSession.toEntity(): ReadingSessionEntity = ReadingSessionEntity(
     pagesRead = pagesRead
 )
 
-fun GutendexBookDto.toDomain(fallbackGenre: String = "Clásicos"): DiscoverBook = DiscoverBook(
-    gutendexId = id,
+fun GutendexBookDto.toDomain(fallbackGenre: String = "Clásicos", sourceId: String = "gutenberg"): DiscoverBook = DiscoverBook(
+    id = "$sourceId:$id",
     title = title,
     author = authors.firstOrNull()?.name ?: "Autor desconocido",
     genre = subjects.firstOrNull()?.substringBefore(" -- ") ?: fallbackGenre,
     coverUrl = formats["image/jpeg"],
     epubDownloadUrl = formats["application/epub+zip"],
-    downloadCount = downloadCount
+    downloadCount = downloadCount,
+    mirrors = com.flux.reader.data.remote.EpubMirrors.candidates(id, null)
 )
