@@ -20,6 +20,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardDoubleArrowDown
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.NavigateBefore
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.Icon
@@ -108,6 +112,83 @@ private fun EpubContent(
     val toggle by rememberUpdatedState(onToggleControls)
     val position by rememberUpdatedState(onPosition)
     val css = styleScript(prefs)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val main = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    // Desplazamiento automático: px por fotograma; al llegar al final pasa al capítulo siguiente.
+    var autoScroll by remember { mutableStateOf(false) }
+    var scrollSpeed by remember { mutableStateOf(1.2f) }
+    LaunchedEffect(autoScroll, chapter, ready) {
+        if (!autoScroll || !ready) return@LaunchedEffect
+        var acc = 0f
+        while (true) {
+            androidx.compose.runtime.withFrameNanos { }
+            val wv = webRef[0] ?: break
+            if (!wv.canScrollVertically(1)) {
+                if (chapter < n - 1) { chapter++; pendingFraction = 0f; ready = false } else autoScroll = false
+                break
+            }
+            acc += scrollSpeed * wv.resources.displayMetrics.density
+            val step = acc.toInt(); if (step > 0) { wv.scrollBy(0, step); acc -= step }
+        }
+    }
+
+    // Lectura en voz alta con el TTS del sistema: párrafo a párrafo, resaltando y siguiendo el que se lee.
+    var speaking by remember { mutableStateOf(false) }
+    var ttsRate by remember { mutableStateOf(1.0f) }
+    var ttsReady by remember { mutableStateOf<Boolean?>(null) }
+    val ttsRef = remember { arrayOfNulls<android.speech.tts.TextToSpeech>(1) }
+    val chapterEnd = remember { intArrayOf(-1) } // id del último fragmento del capítulo en cola
+    DisposableEffect(Unit) {
+        val tts = android.speech.tts.TextToSpeech(context) { status -> main.post { ttsReady = status == android.speech.tts.TextToSpeech.SUCCESS } }
+        tts.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+            override fun onStart(id: String) {
+                val idx = id.substringBefore('.')
+                main.post { webRef[0]?.evaluateJavascript(TTS_FOCUS_JS.replace("IDX", idx), null) }
+            }
+            override fun onDone(id: String) {
+                if (id.substringBefore('.').toIntOrNull() == chapterEnd[0] && id.endsWith(".last")) main.post {
+                    if (!speaking) return@post
+                    if (chapter < n - 1) { chapter++; pendingFraction = 0f; ready = false } else speaking = false
+                }
+            }
+            @Deprecated("API vieja") override fun onError(id: String) {}
+        })
+        ttsRef[0] = tts
+        onDispose { tts.stop(); tts.shutdown(); ttsRef[0] = null }
+    }
+    LaunchedEffect(ttsRate) { ttsRef[0]?.setSpeechRate(ttsRate) }
+    LaunchedEffect(speaking, chapter, ready, ttsReady) {
+        val tts = ttsRef[0] ?: return@LaunchedEffect
+        if (!speaking) { tts.stop(); webRef[0]?.evaluateJavascript(TTS_CLEAR_JS, null); return@LaunchedEffect }
+        if (!ready) { tts.stop(); return@LaunchedEffect }
+        if (ttsReady != true) return@LaunchedEffect
+        webRef[0]?.evaluateJavascript(TTS_COLLECT_JS) { raw ->
+            val parsed = runCatching {
+                val obj = kotlinx.serialization.json.Json.parseToJsonElement(
+                    kotlinx.serialization.json.Json.parseToJsonElement(raw).let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+                ) as kotlinx.serialization.json.JsonObject
+                val start = (obj["start"] as kotlinx.serialization.json.JsonPrimitive).content.toInt()
+                val items = (obj["items"] as kotlinx.serialization.json.JsonArray).map { (it as kotlinx.serialization.json.JsonPrimitive).content }
+                start to items
+            }.getOrNull()
+            if (parsed == null || parsed.second.isEmpty()) {
+                if (chapter < n - 1) { chapter++; pendingFraction = 0f; ready = false } else speaking = false
+                return@evaluateJavascript
+            }
+            val (start, items) = parsed
+            tts.stop()
+            chapterEnd[0] = items.lastIndex
+            val max = (android.speech.tts.TextToSpeech.getMaxSpeechInputLength() - 100).coerceAtLeast(500)
+            for (i in start..items.lastIndex) {
+                val parts = items[i].chunked(max)
+                parts.forEachIndexed { k, part ->
+                    val id = if (i == items.lastIndex && k == parts.lastIndex) "$i.last" else "$i.$k"
+                    tts.speak(part, android.speech.tts.TextToSpeech.QUEUE_ADD, null, id)
+                }
+            }
+        }
+    }
 
     fun report(ch: Int, frac: Float) {
         val virtual = (((ch + frac) / n) * 1000f).roundToInt().coerceIn(1, 1000)
@@ -190,6 +271,7 @@ private fun EpubContent(
                 }
             },
             update = { wv ->
+                wv.keepScreenOn = speaking || autoScroll
                 wv.setBackgroundColor(barColor.toArgb())
                 if (loaded[0] != chapter) { loaded[0] = chapter; ready = false; wv.loadUrl(HOST + epub.spine[chapter]) }
             },
@@ -214,6 +296,28 @@ private fun EpubContent(
                             Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = "Capítulo siguiente")
                         }
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        IconButton(onClick = { speaking = !speaking }, enabled = ttsReady != false) {
+                            Icon(
+                                if (speaking) androidx.compose.material.icons.Icons.Filled.Stop else androidx.compose.material.icons.Icons.Filled.RecordVoiceOver,
+                                contentDescription = if (speaking) "Detener lectura en voz alta" else "Leer en voz alta"
+                            )
+                        }
+                        if (speaking) androidx.compose.material3.TextButton(onClick = {
+                            ttsRate = when (ttsRate) { 0.8f -> 1.0f; 1.0f -> 1.25f; 1.25f -> 1.5f; 1.5f -> 2.0f; else -> 0.8f }
+                        }) { Text("${ttsRate}x", color = barTextColor) }
+                        IconButton(onClick = { autoScroll = !autoScroll }) {
+                            Icon(
+                                if (autoScroll) androidx.compose.material.icons.Icons.Filled.Pause else androidx.compose.material.icons.Icons.Filled.KeyboardDoubleArrowDown,
+                                contentDescription = if (autoScroll) "Pausar desplazamiento automático" else "Desplazamiento automático"
+                            )
+                        }
+                        if (autoScroll) Slider(
+                            value = scrollSpeed, onValueChange = { scrollSpeed = it }, valueRange = 0.3f..4f,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp)
+                        )
+                        if (ttsReady == false && !autoScroll) Text("Sin voz del sistema", style = MaterialTheme.typography.labelSmall)
+                    }
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Sección ${chapter + 1} de $n", style = MaterialTheme.typography.labelMedium)
                         Text("${(((chapter + fraction) / n) * 100).toInt()}%", style = MaterialTheme.typography.labelMedium)
@@ -223,6 +327,20 @@ private fun EpubContent(
         }
     }
 }
+
+/** Junta los bloques de texto del capítulo, los marca y devuelve desde cuál empezar (el primero visible). */
+private const val TTS_COLLECT_JS = "(function(){var els=document.querySelectorAll('p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,dd,dt,td');" +
+    "var items=[],start=-1;for(var i=0;i<els.length;i++){var e=els[i];if(e.querySelector('p,li,blockquote'))continue;var t=(e.innerText||'').trim();if(!t)continue;" +
+    "e.setAttribute('data-flux-tts',items.length);if(start<0&&e.getBoundingClientRect().bottom>0)start=items.length;items.push(t)}" +
+    "if(!items.length){var b=(document.body.innerText||'').split(/\\n+/).map(function(s){return s.trim()}).filter(function(s){return s});items=b;start=0}" +
+    "return JSON.stringify({start:Math.max(start,0),items:items})})()"
+
+private const val TTS_FOCUS_JS = "(function(){var o=document.querySelector('.flux-tts');if(o)o.classList.remove('flux-tts');" +
+    "var e=document.querySelector('[data-flux-tts=\"IDX\"]');if(!e)return;e.classList.add('flux-tts');" +
+    "if(!document.getElementById('flux-tts-style')){var s=document.createElement('style');s.id='flux-tts-style';s.textContent='.flux-tts{background:rgba(0,192,139,.22)!important;border-radius:4px}';document.head.appendChild(s)}" +
+    "e.scrollIntoView({block:'center',behavior:'smooth'})})()"
+
+private const val TTS_CLEAR_JS = "(function(){var o=document.querySelector('.flux-tts');if(o)o.classList.remove('flux-tts')})()"
 
 private fun cssColor(c: Long) = "#%06X".format(c and 0xFFFFFF)
 

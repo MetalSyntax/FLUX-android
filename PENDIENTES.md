@@ -23,3 +23,13 @@ Pendiente: probar en el dispositivo; el parser OPDS no se pudo validar contra el
 - [ ] Probar en el TECNO (no había dispositivo por USB).
 - [ ] Motor OPDS sin validar contra un feed real (Gutenberg 503 y Feedbooks caído el 18-nov).
 - [ ] Las fuentes no van en el respaldo .zip (hay que volver a agregar el repo tras restaurar).
+
+## Funciones tomadas de Episteme — 2026-11-18
+- [x] Formatos TXT, Markdown, HTML y FB2: se convierten a EPUB al importar (TextToEpub; TXT detecta capítulos y Windows-1252; HTML sin scripts/on*; FB2 con autor y portada).
+- [x] Lectura en voz alta (TTS del sistema) en EPUB: párrafo a párrafo, resalta y sigue el párrafo, pasa de capítulo solo, velocidad 0.8–2x.
+- [x] Desplazamiento automático en EPUB con velocidad ajustable; pasa de capítulo al llegar al final. Pantalla encendida mientras lee/desplaza.
+- [x] Sincronizar carpeta: ícono de carpeta en Biblioteca; importa lo nuevo (por nombre de archivo) recursivamente; la carpeta queda recordada.
+- [x] Repo de fuentes: + Gutenberg en español (gutendex languages=es) y unglue.it (OPDS, licencias libres; parser probado con el feed real).
+- [ ] Probar en el TECNO: TTS (voz en español instalada), auto-scroll, importar TXT/FB2, sincronizar carpeta.
+- [ ] TTS y auto-scroll solo en EPUB (no PDF/cómic). Sin sincronización automática en segundo plano.
+- Descartado por costo/beneficio: anotaciones PDF, reflow de PDF, modo músico, MOBI/AZW3, DOCX/ODT.

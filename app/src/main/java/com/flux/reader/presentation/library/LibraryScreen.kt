@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
@@ -110,9 +111,13 @@ fun LibraryScreen(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (uris.isNotEmpty()) viewModel.importUris(uris)
     }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree: Uri? ->
+        tree?.let { viewModel.syncFolder(it) }
+    }
     LaunchedEffect(importTick) { if (importTick > 0) picker.launch(arrayOf("application/epub+zip", "application/pdf", "application/vnd.comicbook+zip",
         "application/vnd.comicbook-rar", "application/x-cbz", "application/x-cbr", "application/zip",
-        "application/x-rar-compressed", "application/octet-stream")) }
+        "application/x-rar-compressed", "text/plain", "text/markdown", "text/html", "application/xhtml+xml",
+        "application/x-fictionbook+xml", "application/xml", "text/xml", "application/octet-stream")) }
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it); viewModel.dismissMessage() }
     }
@@ -125,6 +130,16 @@ fun LibraryScreen(
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, scrolledContainerColor = Color.Transparent),
                 title = { Text("FLUX", fontWeight = FontWeight.Bold, letterSpacing = 4.sp, fontSize = 18.sp) },
                 actions = {
+                    var folderMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { if (viewModel.hasSyncFolder) folderMenu = true else folderPicker.launch(null) }) {
+                            Icon(Icons.Filled.FolderOpen, contentDescription = "Sincronizar carpeta")
+                        }
+                        DropdownMenu(expanded = folderMenu, onDismissRequest = { folderMenu = false }) {
+                            DropdownMenuItem(text = { Text("Buscar libros nuevos en la carpeta") }, onClick = { folderMenu = false; viewModel.syncFolder() })
+                            DropdownMenuItem(text = { Text("Elegir otra carpeta") }, onClick = { folderMenu = false; folderPicker.launch(null) })
+                        }
+                    }
                     Box {
                         IconButton(onClick = { showSortMenu = true }) {
                             Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Ordenar")
@@ -218,7 +233,7 @@ fun LibraryScreen(
             if (state.books.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "Tu biblioteca está vacía. Toca + para importar un EPUB, PDF, CBZ o CBR.",
+                        text = "Tu biblioteca está vacía. Toca + para importar EPUB, PDF, CBZ/CBR, TXT, Markdown, HTML o FB2.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(24.dp)

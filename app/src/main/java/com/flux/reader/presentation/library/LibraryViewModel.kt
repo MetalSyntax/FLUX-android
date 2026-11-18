@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -113,6 +114,29 @@ class LibraryViewModel @Inject constructor(
             if (errors.isNotEmpty()) { if (isNotEmpty()) append(". "); append("No se pudo: ${errors.joinToString("; ")}") }
         }.ifBlank { null }
     }
+
+    /** Importa de la carpeta sincronizada los archivos que aún no están (mismo nombre de archivo = ya importado). */
+    fun syncFolder(newTree: Uri? = null) = viewModelScope.launch {
+        val tree = runCatching { newTree?.also { libraryFiles.syncFolder = it } ?: libraryFiles.syncFolder }
+            .getOrElse { message.value = "No se pudo acceder a la carpeta: ${it.message}"; return@launch } ?: return@launch
+        importing.value = true
+        val r = runCatching {
+            val have = bookRepository.observeLibrary().first().map { it.fileName.lowercase() }.toSet()
+            val pending = libraryFiles.listFolder(tree).filter { it.second.lowercase() !in have }
+            var ok = 0; val errors = ArrayList<String>()
+            for ((uri, name) in pending) {
+                libraryFiles.importUri(uri, name).onSuccess { bookRepository.upsertBook(it); ok++ }.onFailure { errors += name }
+            }
+            buildString {
+                append(if (ok > 0) "$ok libro(s) nuevo(s) de «${libraryFiles.folderLabel(tree)}»" else "La carpeta «${libraryFiles.folderLabel(tree)}» no tiene libros nuevos")
+                if (errors.isNotEmpty()) append(". No se pudo: ${errors.take(5).joinToString("; ")}${if (errors.size > 5) "…" else ""}")
+            }
+        }
+        importing.value = false
+        message.value = r.getOrElse { "No se pudo leer la carpeta (¿se quitó el permiso?): ${it.message}" }
+    }
+
+    val hasSyncFolder: Boolean get() = libraryFiles.syncFolder != null
 
     fun onRemoveFromCollection(collection: BookCollection, bookId: String) = viewModelScope.launch {
         manageCollections.removeBook(collection, bookId)

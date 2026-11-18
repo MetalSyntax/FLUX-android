@@ -10,12 +10,28 @@
       "description": "Más de 70.000 libros de dominio público vía Gutendex."
     },
     {
+      "id": "gutenberg-es",
+      "name": "Project Gutenberg (español)",
+      "type": "gutendex",
+      "url": "https://gutendex.com/books/?languages=es",
+      "lang": "es",
+      "description": "Solo los libros en español de Project Gutenberg."
+    },
+    {
       "id": "openlibrary",
       "name": "Open Library",
       "type": "openlibrary",
       "url": "https://openlibrary.org",
       "lang": "multi",
       "description": "Solo obras de dominio público; EPUB desde archive.org."
+    },
+    {
+      "id": "unglueit",
+      "name": "unglue.it",
+      "type": "opds",
+      "url": "https://unglue.it/api/opds/epub/?order_by=popular",
+      "lang": "en",
+      "description": "Libros con licencia libre (Creative Commons y dominio público), los más populares primero."
     }
   ]
 }
