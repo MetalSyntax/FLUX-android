@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- verde Flux (#00C08B → primario #006B4D), mismo estilo de degradado que Vitreon -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient android:angle="315" android:startColor="#00C08B" android:endColor="#006B4D" />
+</shape>

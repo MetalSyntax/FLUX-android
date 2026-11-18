@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="flux_surface">#0D1110</color>
+    <color name="flux_aqua">#00C08B</color>
+    <color name="flux_violet">#7C6CF0</color>
+</resources>
